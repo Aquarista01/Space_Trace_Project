@@ -81,3 +81,31 @@ Mở địa chỉ Vite in ra (thường `http://localhost:5173`).
 ### 5. Google OAuth (để đăng nhập)
 
 Trong Google Cloud Console, thêm vào OAuth client: JavaScript origin là địa chỉ frontend và redirect URI trùng `GOOGLE_REDIRECT_URI` trong `.env`. Bật Photos Picker API nếu muốn nhập ảnh từ Google Photos.
+
+## Chạy bằng Docker (production)
+
+Chạy toàn bộ hệ thống (PostgreSQL, SeaweedFS, migrate, 2 backend, web Nginx) bằng Docker Compose.
+
+```bash
+cp .env.example .env
+cp .env.deploy.example .env.deploy
+# điền giá trị thật vào .env, chọn khối local hoặc server trong .env.deploy
+```
+
+Các lệnh thường dùng (rút gọn bằng biến `C`):
+
+```bash
+C="docker compose -f docker-compose.prod.yml --env-file .env --env-file .env.deploy"
+
+$C up -d --build   # build và chạy
+$C ps              # xem trạng thái container
+$C logs -f api1    # xem log backend
+$C stop            # dừng, giữ dữ liệu
+$C down            # xóa container, giữ dữ liệu
+```
+
+Sau khi chạy: ứng dụng ở `http://localhost:8080`, Swagger ở `http://localhost:8080/docs`.
+
+> **Cảnh báo:** `down -v` xóa cả volume `pgdata` và `seaweeddata`, tức mất toàn bộ dữ liệu và ảnh. Không dùng trên server thật.
+
+Trên server, web chỉ mở ở `127.0.0.1:8080`; dùng Caddy hoặc Nginx của máy chủ để bật HTTPS.
