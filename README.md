@@ -28,3 +28,56 @@ Hệ thống tự phát hiện đồ vật trong ảnh, nhận biết cùng mộ
 ## Kiến trúc tóm tắt
 
 Trình duyệt (React) gọi REST API của FastAPI. Backend ghi dữ liệu vào PostgreSQL, ảnh vào SeaweedFS và chạy hai mô hình AI trên CPU khi nhập ảnh. Kiểu kiến trúc: client-server, SPA + REST API, backend nguyên khối.
+
+
+## Chạy local (phát triển)
+
+### Yêu cầu
+
+- Python 3.11, Node.js 20, Docker Desktop, Git
+
+### 1. Cấu hình
+
+```bash
+git clone ...
+cd Space-Trace
+cp .env.example .env
+```
+
+Mở `.env` và điền giá trị thật (JWT_SECRET, TOKEN_ENCRYPTION_KEY, mật khẩu DB, khóa S3, Google OAuth).
+
+### 2. Chạy PostgreSQL và SeaweedFS
+
+```bash
+docker compose up -d
+```
+
+PostgreSQL mở ở cổng `5433`, SeaweedFS S3 ở cổng `8333`.
+
+### 3. Chạy backend
+
+```bash
+cd backend
+python -m venv .venv
+# Windows: .venv\Scripts\activate    Linux/macOS: source .venv/bin/activate
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+alembic upgrade head
+uvicorn app.main:app --reload --port 8000
+```
+
+API chạy ở `http://localhost:8000`, tài liệu Swagger ở `http://localhost:8000/docs`. Lần đầu nhập ảnh, mô hình YOLO và OpenCLIP sẽ được tải về nên hơi lâu.
+
+### 4. Chạy frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Mở địa chỉ Vite in ra (thường `http://localhost:5173`).
+
+### 5. Google OAuth (để đăng nhập)
+
+Trong Google Cloud Console, thêm vào OAuth client: JavaScript origin là địa chỉ frontend và redirect URI trùng `GOOGLE_REDIRECT_URI` trong `.env`. Bật Photos Picker API nếu muốn nhập ảnh từ Google Photos.
