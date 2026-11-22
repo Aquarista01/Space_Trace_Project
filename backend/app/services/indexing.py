@@ -1,9 +1,16 @@
 import uuid
+from io import BytesIO
 
+from PIL import Image
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.models.object import ObjectEntity
+from app.models.observation import Observation
+from app.models.source_media import SourceMedia
+from app.services import storage
+from app.services.ai import detector, embedder
+from app.models.scene_state import SceneState
 from app.models.space import Space
-from app.services.ai import embedder
 
 MATCH_THRESHOLD = 0.82
 REVIEW_THRESHOLD = 0.70
@@ -68,3 +75,56 @@ def find_or_create_object(db: Session, user_id: uuid.UUID, label: str, embedding
     db.flush()
     return new_object
 
+
+def process_media(db: Session, media: SourceMedia) -> None:
+    if db.query(Observation).filter_by(media_id=media.id).first() is not None:
+        return
+
+    data = storage.get_s3().get_object(settings.S3_BUCKET, media.minio_key).read()
+    image = Image.open(BytesIO(data)).convert("RGB")
+    width, height = image.size
+
+    scene_embedding = embedder.embed_image(image)
+    space = find_or_create_space(db, media.user_id, scene_embedding)
+
+    scene = SceneState(
+        user_id=media.user_id,
+        space_id=space.id,
+        media_id=media.id,
+        taken_at=media.taken_at or media.created_at,
+    )
+    db.add(scene)
+    db.flush()
+
+    detections = detector.detect_from_image(image)
+
+    for det in detections:
+        crop_box = (
+            int(det["bbox_x"] * width),
+            int(det["bbox_y"] * height),
+            int((det["bbox_x"] + det["bbox_w"]) * width),
+            int((det["bbox_y"] + det["bbox_h"]) * height),
+        )
+        crop = image.crop(crop_box)
+        embedding = embedder.embed_image(crop)
+
+        obj = find_or_create_object(db, media.user_id, det["label"], embedding)
+
+        db.add(Observation(
+            user_id=media.user_id,
+            object_id=obj.id,
+            media_id=media.id,
+            space_id=space.id,
+            scene_id=scene.id,
+            class_label=det["label"],
+            confidence=det["confidence"],
+            bbox_x=det["bbox_x"],
+            bbox_y=det["bbox_y"],
+            bbox_w=det["bbox_w"],
+            bbox_h=det["bbox_h"],
+            embedding=embedder.to_bytes(embedding),
+            observed_at=media.taken_at or media.created_at,
+        ))
+
+    media.index_status = "done"
+    db.commit()
