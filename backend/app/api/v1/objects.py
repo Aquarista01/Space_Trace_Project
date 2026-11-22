@@ -12,6 +12,7 @@ from app.models.space import Space
 from app.schemas.objects import (
     LastSeenOut,
     ObjectListItemOut,
+    PendingMatchOut,
 )
 from app.services import storage
 import logging
@@ -92,6 +93,30 @@ def list_objects(db: Session = Depends(get_db), user=Depends(get_current_user)):
             display_name=obj.display_name,
             is_confirmed=obj.is_confirmed,
             last_seen=last_seen_map.get(obj.id),
+        )
+        for obj in objects
+    ]
+    
+@router.get("/pending-review", response_model=list[PendingMatchOut])
+def list_pending_reviews(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    objects = (
+        db.query(ObjectEntity)
+        .filter(ObjectEntity.user_id == user.id, ObjectEntity.pending_match_id.isnot(None))
+        .all()
+    )
+    candidate_ids = {o.pending_match_id for o in objects}
+    candidates = db.query(ObjectEntity).filter(ObjectEntity.id.in_(candidate_ids)).all() if candidate_ids else []
+    candidates_by_id = {c.id: c for c in candidates}
+
+    return [
+        PendingMatchOut(
+            id=obj.id,
+            label=obj.label,
+            display_name=obj.display_name,
+            candidate_id=obj.pending_match_id,
+            candidate_label=candidates_by_id[obj.pending_match_id].label if obj.pending_match_id in candidates_by_id else None,
+            candidate_display_name=candidates_by_id[obj.pending_match_id].display_name if obj.pending_match_id in candidates_by_id else None,
+            score=obj.pending_match_score,
         )
         for obj in objects
     ]
