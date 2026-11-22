@@ -4,6 +4,10 @@ from fastapi import APIRouter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from app.models.observation import Observation
+from app.models.source_media import SourceMedia
+from app.models.space import Space
+from app.schemas.objects import LastSeenOut
+from app.services import storage
 
 router = APIRouter(prefix="/objects", tags=["Objects"])
 
@@ -20,3 +24,33 @@ def _latest_observations_by_object(db: Session, user_id: uuid.UUID) -> dict[uuid
     )
     rows = db.execute(stmt).scalars().all()
     return {row.object_id: row for row in rows}
+
+def _build_last_seen_map(
+    db: Session, latest_map: dict[uuid.UUID, Observation]
+) -> dict[uuid.UUID, LastSeenOut]:
+    media_ids = {obs.media_id for obs in latest_map.values()}
+    media_rows = db.query(SourceMedia).filter(SourceMedia.id.in_(media_ids)).all() if media_ids else []
+    media_keys = {m.id: m.minio_key for m in media_rows}
+
+    space_ids = {obs.space_id for obs in latest_map.values() if obs.space_id}
+    space_rows = db.query(Space).filter(Space.id.in_(space_ids)).all() if space_ids else []
+    space_names = {s.id: s.name for s in space_rows}
+
+    result = {}
+    for object_id, obs in latest_map.items():
+        key = media_keys.get(obs.media_id)
+        if key is None:
+            continue
+        result[object_id] = LastSeenOut(
+            observed_at=obs.observed_at,
+            space_id=obs.space_id,
+            space_name=space_names.get(obs.space_id),
+            media_id=obs.media_id,
+            image_url=storage.get_presigned_url(key),
+            confidence=obs.confidence,
+            bbox_x=obs.bbox_x,
+            bbox_y=obs.bbox_y,
+            bbox_w=obs.bbox_w,
+            bbox_h=obs.bbox_h,
+        )
+    return result
