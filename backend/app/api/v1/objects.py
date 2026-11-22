@@ -233,3 +233,31 @@ def delete_object(object_id: uuid.UUID, db: Session = Depends(get_db), user=Depe
 
     db.delete(obj)
     db.commit()
+    
+@router.post("/{object_id}/confirm-match", response_model=ObjectListItemOut)
+def confirm_match(object_id: uuid.UUID, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    obj = db.get(ObjectEntity, object_id)
+    if obj is None or obj.user_id != user.id or obj.pending_match_id is None:
+        raise HTTPException(404, "No pending match for this object")
+
+    target = db.get(ObjectEntity, obj.pending_match_id)
+    if target is None:
+        obj.pending_match_id = None
+        obj.pending_match_score = None
+        db.commit()
+        raise HTTPException(409, "Candidate object no longer exists")
+
+    db.query(Observation).filter_by(object_id=obj.id).update({"object_id": target.id})
+    db.delete(obj)
+    db.commit()
+    db.refresh(target)
+
+    latest_map = _latest_observations_by_object(db, user.id)
+    last_seen_map = _build_last_seen_map(db, latest_map)
+    return ObjectListItemOut(
+        id=target.id,
+        label=target.label,
+        display_name=target.display_name,
+        is_confirmed=target.is_confirmed,
+        last_seen=last_seen_map.get(target.id),
+    )
