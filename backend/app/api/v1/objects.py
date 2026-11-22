@@ -223,3 +223,13 @@ def update_object(
         is_confirmed=obj.is_confirmed,
         last_seen=last_seen_map.get(object_id),
     )
+    
+    
+@router.delete("/{object_id}", status_code=204)
+def delete_object(object_id: uuid.UUID, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    obj = db.get(ObjectEntity, object_id)
+    if obj is None or obj.user_id != user.id:
+        raise HTTPException(404, "Object not found")
+
+    db.delete(obj)
+    db.commit()
