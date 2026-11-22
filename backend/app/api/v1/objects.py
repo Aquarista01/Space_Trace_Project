@@ -261,3 +261,24 @@ def confirm_match(object_id: uuid.UUID, db: Session = Depends(get_db), user=Depe
         is_confirmed=target.is_confirmed,
         last_seen=last_seen_map.get(target.id),
     )
+    
+@router.post("/{object_id}/dismiss-match", response_model=ObjectListItemOut)
+def dismiss_match(object_id: uuid.UUID, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    obj = db.get(ObjectEntity, object_id)
+    if obj is None or obj.user_id != user.id:
+        raise HTTPException(404, "Object not found")
+
+    obj.pending_match_id = None
+    obj.pending_match_score = None
+    db.commit()
+    db.refresh(obj)
+
+    latest_map = _latest_observations_by_object(db, user.id)
+    last_seen_map = _build_last_seen_map(db, latest_map)
+    return ObjectListItemOut(
+        id=obj.id,
+        label=obj.label,
+        display_name=obj.display_name,
+        is_confirmed=obj.is_confirmed,
+        last_seen=last_seen_map.get(obj.id),
+    )
