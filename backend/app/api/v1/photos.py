@@ -1,6 +1,6 @@
-
 import uuid
-from fastapi import APIRouter, Depends
+
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -13,12 +13,12 @@ from app.models.object import ObjectEntity
 from app.models.picker_session import PickerSession
 from app.models.source_media import SourceMedia
 from app.models.space import Space
-from app.schemas.photos import PickerSessionOut
-from app.services import google_photos, storage
-from fastapi import APIRouter, Depends,HTTPException
 from app.schemas.photos import  PickerSessionOut
-from app.services import google_photos, storage
+from app.services import google_photos, indexing, storage
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
+from app.schemas.photos import  PickerSessionOut
+from app.services import google_photos, indexing, media_ingest, storage
 router = APIRouter(prefix="/photos", tags=["Photos"])
 
 @router.get("/summary")
@@ -130,3 +130,85 @@ def poll_session(
         db.commit()
 
     return session  
+
+def run_import(
+    job_id: uuid.UUID,
+    session_id: uuid.UUID,
+    user_id: uuid.UUID,
+    db_factory,
+):
+    db = db_factory()
+
+    try:
+        job = db.get(IndexJob, job_id)
+        session = db.get(PickerSession, session_id)
+
+        access_token = google_photos.get_access_token(db, user_id)
+
+        items = google_photos.list_picked_media_items(
+            access_token,
+            session.google_session_id,
+        )
+
+        job.total = len(items)
+        db.commit()
+
+        for item in items:
+            try:
+                media_file = item["mediaFile"]
+
+                content = google_photos.download_media_bytes(
+                    access_token,
+                    media_file["baseUrl"],
+                )
+
+                mime_type = media_file.get(
+                    "mimeType",
+                    "image/jpeg",
+                )
+
+                captured_at = media_ingest.parse_create_time(
+                    item.get("createTime")
+                )
+
+                existing = (
+                    db.query(SourceMedia)
+                    .filter_by(
+                        user_id=user_id,
+                        google_item_id=item["id"],
+                    )
+                    .first()
+                )
+
+                if existing is not None:
+                    media = existing
+                else:
+                    media, _ = media_ingest.save_media(
+                        db,
+                        user_id,
+                        content,
+                        mime_type,
+                        captured_at=captured_at,
+                        google_item_id=item["id"],
+                    )
+
+                try:
+                    indexing.process_media(db, media)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    media.index_status = "failed"
+
+                job.processed += 1
+
+            except Exception:
+                job.failed += 1
+
+            db.commit()
+
+        session.status = "done"
+        job.status = "done"
+        db.commit()
+
+    finally:
+        db.close()
