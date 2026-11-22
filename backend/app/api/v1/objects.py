@@ -14,6 +14,7 @@ from app.schemas.objects import (
     ObjectListItemOut,
     ObservationOut,
     PendingMatchOut,
+    ObjectUpdateIn
 )
 from app.services import storage
 import logging
@@ -186,3 +187,39 @@ def get_object_history(object_id: uuid.UUID, db: Session = Depends(get_db), user
             bbox_h=obs.bbox_h,
         ))
     return result
+
+
+@router.patch("/{object_id}", response_model=ObjectListItemOut)
+def update_object(
+    object_id: uuid.UUID,
+    payload: ObjectUpdateIn,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    obj = db.get(ObjectEntity, object_id)
+    if obj is None or obj.user_id != user.id:
+        raise HTTPException(404, "Object not found")
+
+    if payload.display_name is not None:
+        obj.display_name = payload.display_name
+    if payload.is_confirmed is not None:
+        obj.is_confirmed = payload.is_confirmed
+
+    db.commit()
+    db.refresh(obj)
+
+    latest = (
+        db.query(Observation)
+        .filter_by(user_id=user.id, object_id=object_id)
+        .order_by(func.coalesce(Observation.observed_at, Observation.created_at).desc())
+        .first()
+    )
+    last_seen_map = _build_last_seen_map(db, {object_id: latest}) if latest else {}
+
+    return ObjectListItemOut(
+        id=obj.id,
+        label=obj.label,
+        display_name=obj.display_name,
+        is_confirmed=obj.is_confirmed,
+        last_seen=last_seen_map.get(object_id),
+    )
