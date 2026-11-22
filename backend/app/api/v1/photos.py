@@ -1,5 +1,5 @@
 
-
+import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -15,7 +15,7 @@ from app.models.source_media import SourceMedia
 from app.models.space import Space
 from app.schemas.photos import PickerSessionOut
 from app.services import google_photos, storage
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends,HTTPException
 from app.schemas.photos import  PickerSessionOut
 from app.services import google_photos, storage
 
@@ -102,3 +102,31 @@ def create_session(
     db.refresh(session)
 
     return session
+
+
+@router.get(
+    "/picker-sessions/{session_id}",
+    response_model=PickerSessionOut,
+)
+def poll_session(
+    session_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    session = db.get(PickerSession, session_id)
+
+    if session is None or session.user_id != user.id:
+        raise HTTPException(404, "Session not found")
+
+    access_token = google_photos.get_access_token(db, user.id)
+
+    data = google_photos.get_picker_session(
+        access_token,
+        session.google_session_id,
+    )
+
+    if data.get("mediaItemsSet"):
+        session.status = "picked"
+        db.commit()
+
+    return session  
