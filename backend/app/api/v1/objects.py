@@ -1,11 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models.object import ObjectEntity
+from app.models.object import ObjectEntity  
 from app.models.observation import Observation
 from app.models.source_media import SourceMedia
 from app.models.space import Space
@@ -120,3 +120,27 @@ def list_pending_reviews(db: Session = Depends(get_db), user=Depends(get_current
         )
         for obj in objects
     ]
+    
+    
+@router.get("/{object_id}", response_model=ObjectListItemOut)
+def get_object(object_id: uuid.UUID, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    obj = db.get(ObjectEntity, object_id)
+    if obj is None or obj.user_id != user.id:
+        raise HTTPException(404, "Object not found")
+
+    latest = (
+        db.query(Observation)
+        .filter_by(user_id=user.id, object_id=object_id)
+        .order_by(func.coalesce(Observation.observed_at, Observation.created_at).desc())
+        .first()
+    )
+
+    last_seen_map = _build_last_seen_map(db, {object_id: latest}) if latest else {}
+
+    return ObjectListItemOut(
+        id=obj.id,
+        label=obj.label,
+        display_name=obj.display_name,
+        is_confirmed=obj.is_confirmed,
+        last_seen=last_seen_map.get(object_id),
+    )
