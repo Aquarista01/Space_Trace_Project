@@ -12,6 +12,7 @@ from app.models.space import Space
 from app.schemas.objects import (
     LastSeenOut,
     ObjectListItemOut,
+    ObservationOut,
     PendingMatchOut,
 )
 from app.services import storage
@@ -144,3 +145,44 @@ def get_object(object_id: uuid.UUID, db: Session = Depends(get_db), user=Depends
         is_confirmed=obj.is_confirmed,
         last_seen=last_seen_map.get(object_id),
     )
+    
+@router.get("/{object_id}/history", response_model=list[ObservationOut])
+def get_object_history(object_id: uuid.UUID, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    obj = db.get(ObjectEntity, object_id)
+    if obj is None or obj.user_id != user.id:
+        raise HTTPException(404, "Object not found")
+
+    observations = (
+        db.query(Observation)
+        .filter_by(user_id=user.id, object_id=object_id)
+        .order_by(func.coalesce(Observation.observed_at, Observation.created_at).desc())
+        .all()
+    )
+
+    media_ids = {obs.media_id for obs in observations}
+    media_rows = db.query(SourceMedia).filter(SourceMedia.id.in_(media_ids)).all() if media_ids else []
+    media_keys = {m.id: m.minio_key for m in media_rows}
+
+    space_ids = {obs.space_id for obs in observations if obs.space_id}
+    space_rows = db.query(Space).filter(Space.id.in_(space_ids)).all() if space_ids else []
+    space_names = {s.id: s.name for s in space_rows}
+
+    result = []
+    for obs in observations:
+        key = media_keys.get(obs.media_id)
+        if key is None:
+            continue
+        result.append(ObservationOut(
+            id=obs.id,
+            observed_at=obs.observed_at,
+            space_id=obs.space_id,
+            space_name=space_names.get(obs.space_id),
+            media_id=obs.media_id,
+            image_url=storage.get_presigned_url(key),
+            confidence=obs.confidence,
+            bbox_x=obs.bbox_x,
+            bbox_y=obs.bbox_y,
+            bbox_w=obs.bbox_w,
+            bbox_h=obs.bbox_h,
+        ))
+    return result
