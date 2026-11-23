@@ -8,10 +8,16 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.diff_item import DiffItem
 from app.models.diff_result import DiffResult
+from app.models.observation import Observation
 from app.models.scene_state import SceneState
 from app.models.source_media import SourceMedia
 from app.models.space import Space
-from app.schemas.space import SpaceOut, SpaceUpdate
+from app.schemas.space import (
+    MergeSpacesIn,
+    SceneOut,
+    SpaceOut,
+    SpaceUpdate,
+)
 from app.services import storage
 
 router = APIRouter(prefix="/spaces", tags=["Spaces"])
@@ -226,5 +232,98 @@ def update_space(
 
     db.commit()
     db.refresh(space)
+
+    return get_space(space_id, db, user)
+
+
+@router.get("/{space_id}/scenes", response_model=list[SceneOut])
+def list_scenes(
+    space_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    space = db.get(Space, space_id)
+
+    if space is None or space.user_id != user.id:
+        raise HTTPException(404, "Space not found")
+
+    scenes = (
+        db.query(SceneState)
+        .filter_by(space_id=space_id)
+        .order_by(SceneState.taken_at.asc())
+        .all()
+    )
+
+    if not scenes:
+        return []
+
+    scene_ids = [s.id for s in scenes]
+    media_ids = {s.media_id for s in scenes}
+
+    media_rows = (
+        db.query(SourceMedia)
+        .filter(SourceMedia.id.in_(media_ids))
+        .all()
+    )
+
+    media_keys = {m.id: m.minio_key for m in media_rows}
+
+    counts = dict(
+        db.query(Observation.scene_id, func.count(Observation.id))
+        .filter(Observation.scene_id.in_(scene_ids))
+        .group_by(Observation.scene_id)
+        .all()
+    )
+
+    result = []
+
+    for scene in scenes:
+        key = media_keys.get(scene.media_id)
+
+        result.append(
+            SceneOut(
+                id=scene.id,
+                taken_at=scene.taken_at,
+                media_url=storage.get_presigned_url(key) if key else "",
+                object_count=counts.get(scene.id, 0),
+            )
+        )
+
+    return result
+
+
+@router.post("/{space_id}/merge", response_model=SpaceOut)
+def merge_spaces(
+    space_id: uuid.UUID,
+    payload: MergeSpacesIn,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if space_id == payload.source_id:
+        raise HTTPException(400, "Cannot merge a space into itself")
+
+    target = db.get(Space, space_id)
+    source = db.get(Space, payload.source_id)
+
+    if target is None or target.user_id != user.id:
+        raise HTTPException(404, "Target space not found")
+
+    if source is None or source.user_id != user.id:
+        raise HTTPException(404, "Source space not found")
+
+    db.query(SceneState).filter_by(space_id=source.id).update(
+        {"space_id": target.id}
+    )
+
+    db.query(Observation).filter_by(space_id=source.id).update(
+        {"space_id": target.id}
+    )
+
+    db.query(DiffResult).filter_by(space_id=source.id).update(
+        {"space_id": target.id}
+    )
+
+    db.delete(source)
+    db.commit()
 
     return get_space(space_id, db, user)
