@@ -1,4 +1,5 @@
 import uuid
+import math
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
@@ -8,17 +9,22 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.diff_item import DiffItem
 from app.models.diff_result import DiffResult
+from app.models.object import ObjectEntity
 from app.models.observation import Observation
 from app.models.scene_state import SceneState
 from app.models.source_media import SourceMedia
 from app.models.space import Space
 from app.schemas.space import (
-    MergeSpacesIn,
+    DiffCreate,
+    DiffItemOut,
+    DiffResultOut,
     SceneOut,
     SpaceOut,
     SpaceUpdate,
+    MergeSpacesIn,
+    BBoxOut,
 )
-from app.services import storage
+from app.services import diffing, storage
 
 router = APIRouter(prefix="/spaces", tags=["Spaces"])
 
@@ -64,6 +70,33 @@ def _change_counts(db: Session, user_id: uuid.UUID) -> dict[uuid.UUID, int]:
         diff_to_space[diff_id]: count
         for diff_id, count in rows
     }
+
+
+@router.get("/{space_id}/diffs/latest", response_model=DiffResultOut)
+def get_latest_diff(
+    space_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    space = db.get(Space, space_id)
+
+    if space is None or space.user_id != user.id:
+        raise HTTPException(404, "Space not found")
+
+    diff = (
+        db.query(DiffResult)
+        .filter_by(user_id=user.id, space_id=space_id)
+        .order_by(DiffResult.created_at.desc())
+        .first()
+    )
+
+    if diff is None:
+        raise HTTPException(
+            404,
+            "No comparison has been made for this space yet",
+        )
+
+    return _build_diff_response(db, diff)
 
 
 def _space_change_count(db: Session, space_id: uuid.UUID) -> int:
@@ -327,3 +360,222 @@ def merge_spaces(
     db.commit()
 
     return get_space(space_id, db, user)
+
+
+@router.post("/diffs", response_model=DiffResultOut)
+def create_diff(
+    payload: DiffCreate,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    space = db.get(Space, payload.space_id)
+
+    if space is None or space.user_id != user.id:
+        raise HTTPException(404, "Space not found")
+
+    scene_a = db.get(SceneState, payload.scene_a_id)
+    scene_b = db.get(SceneState, payload.scene_b_id)
+
+    if (
+        not scene_a
+        or not scene_b
+        or scene_a.space_id != space.id
+        or scene_b.space_id != space.id
+    ):
+        raise HTTPException(
+            400,
+            "Both scenes must belong to the given space",
+        )
+
+    diff = diffing.compute_diff(
+        db,
+        user.id,
+        space.id,
+        scene_a.id,
+        scene_b.id,
+    )
+
+    return _build_diff_response(db, diff)
+
+
+@router.get("/diffs/{diff_id}", response_model=DiffResultOut)
+def get_diff(
+    diff_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    diff = db.get(DiffResult, diff_id)
+
+    if diff is None or diff.user_id != user.id:
+        raise HTTPException(404, "Diff not found")
+
+    return _build_diff_response(db, diff)
+
+
+def _build_diff_response(
+    db: Session,
+    diff: DiffResult,
+) -> DiffResultOut:
+    scene_a = db.get(SceneState, diff.scene_a_id)
+    scene_b = db.get(SceneState, diff.scene_b_id)
+
+    media_a = db.get(SourceMedia, scene_a.media_id) if scene_a else None
+    media_b = db.get(SourceMedia, scene_b.media_id) if scene_b else None
+
+    diff_items = (
+        db.query(DiffItem)
+        .filter_by(diff_id=diff.id)
+        .all()
+    )
+
+    scene_a_obs = (
+        db.query(Observation)
+        .filter_by(scene_id=scene_a.id)
+        .all()
+        if scene_a
+        else []
+    )
+
+    scene_b_obs = (
+        db.query(Observation)
+        .filter_by(scene_id=scene_b.id)
+        .all()
+        if scene_b
+        else []
+    )
+
+    obs_ids = set()
+
+    for item in diff_items:
+        if item.observation_a_id:
+            obs_ids.add(item.observation_a_id)
+
+        if item.observation_b_id:
+            obs_ids.add(item.observation_b_id)
+
+    observations = (
+        db.query(Observation)
+        .filter(Observation.id.in_(obs_ids))
+        .all()
+        if obs_ids
+        else []
+    )
+
+    obs_by_id = {o.id: o for o in observations}
+
+    object_ids = {
+        i.object_id
+        for i in diff_items
+        if i.object_id
+    }
+
+    object_ids |= {
+        o.object_id
+        for o in scene_a_obs
+        if o.object_id
+    }
+
+    object_ids |= {
+        o.object_id
+        for o in scene_b_obs
+        if o.object_id
+    }
+
+    objects = (
+        db.query(ObjectEntity)
+        .filter(ObjectEntity.id.in_(object_ids))
+        .all()
+        if object_ids
+        else []
+    )
+
+    objects_by_id = {o.id: o for o in objects}
+
+    def _bbox(obs_id):
+        obs = obs_by_id.get(obs_id)
+
+        if obs is None:
+            return None
+
+        return BBoxOut(
+            x=obs.bbox_x,
+            y=obs.bbox_y,
+            w=obs.bbox_w,
+            h=obs.bbox_h,
+        )
+
+    def _center(o):
+        return (
+            o.bbox_x + o.bbox_w / 2,
+            o.bbox_y + o.bbox_h / 2,
+        )
+
+    def _nearest_label(obs_id, candidates):
+        obs = obs_by_id.get(obs_id)
+
+        if obs is None:
+            return None
+
+        cx, cy = _center(obs)
+        best = None
+        best_dist = None
+
+        for cand in candidates:
+            if cand.id == obs.id or cand.object_id == obs.object_id:
+                continue
+
+            ox, oy = _center(cand)
+            distance = math.hypot(cx - ox, cy - oy)
+
+            if best_dist is None or distance < best_dist:
+                best_dist = distance
+                best = cand
+
+        if best is None:
+            return None
+
+        obj = objects_by_id.get(best.object_id)
+
+        return (obj.display_name or obj.label) if obj else None
+
+    items = []
+
+    for item in diff_items:
+        obj = objects_by_id.get(item.object_id)
+        label = (obj.display_name or obj.label) if obj else None
+
+        items.append(
+            DiffItemOut(
+                object_id=item.object_id,
+                object_label=label,
+                change_type=item.change_type,
+                confidence=item.confidence,
+                bbox_a=_bbox(item.observation_a_id),
+                bbox_b=_bbox(item.observation_b_id),
+                nearest_label_a=_nearest_label(
+                    item.observation_a_id,
+                    scene_a_obs,
+                ),
+                nearest_label_b=_nearest_label(
+                    item.observation_b_id,
+                    scene_b_obs,
+                ),
+            )
+        )
+
+    return DiffResultOut(
+        id=diff.id,
+        scene_a_id=diff.scene_a_id,
+        scene_b_id=diff.scene_b_id,
+        scene_a_url=(
+            storage.get_presigned_url(media_a.minio_key)
+            if media_a
+            else ""
+        ),
+        scene_b_url=(
+            storage.get_presigned_url(media_b.minio_key)
+            if media_b
+            else ""
+        ),
+        items=items,
+    )
