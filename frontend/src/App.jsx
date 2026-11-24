@@ -1,16 +1,26 @@
 import { Navigate, Route, Routes } from "react-router-dom";
-import { AuthProvider } from "@/context/AuthContext";
-import { Toaster } from "react-hot-toast";
-
-import HomePage from "@/pages/HomePage";
-
+import { AuthProvider, useAuth } from "@/context/AuthContext";
+import AppShell from "@/components/layout/AppShell";
 import OverviewPage from "@/pages/app/OverviewPage";
-import PhotosPage from "@/pages/app/PhotosPage";
+import PlaceholderPage from "@/pages/app/PlaceholderPage";
+import HomePage from "@/pages/HomePage";
 import ObjectsPage from "@/pages/app/ObjectsPage";
-import ObjectDetailPage from "@/pages/app/ObjectDetailPage";
 import SpacesPage from "@/pages/app/SpacesPage";
+import PhotosPage from "@/pages/app/PhotosPage";
+import SettingsPage from "@/pages/app/SettingsPage";
+import ObjectDetailPage from "@/pages/app/ObjectDetailPage";
 import SpaceDetailPage from "@/pages/app/SpaceDetailPage";
 import SpaceDiffPage from "@/pages/app/SpaceDiffPage";
+import { Toaster } from "react-hot-toast";
+function RequireAuth({ children }) {
+  const { isAuthenticated, loading } = useAuth();
+
+  if (!loading && !isAuthenticated) {
+    return <Navigate to="/" replace />;
+  }
+
+  return children;
+}
 
 export default function App() {
   return (
@@ -19,43 +29,32 @@ export default function App() {
         position="top-right"
         toastOptions={{
           duration: 3500,
-          style: {
-            fontSize: "14px",
-          },
+          style: { fontSize: "14px" },
         }}
       />
-
       <Routes>
-        {/* Homepage */}
         <Route path="/" element={<HomePage />} />
 
-        {/* Overview */}
-        <Route path="/dashboard" element={<OverviewPage />} />
-
-        {/* Photos */}
-        <Route path="/dashboard/photos" element={<PhotosPage />} />
-
-        {/* Objects */}
-        <Route path="/dashboard/objects" element={<ObjectsPage />} />
         <Route
-          path="/dashboard/objects/:id"
-          element={<ObjectDetailPage />}
-        />
+          path="/dashboard"
+          element={
+            <RequireAuth>
+              <AppShell />
+            </RequireAuth>
+          }
+        >
+          <Route index element={<OverviewPage />} />
+          <Route path="objects" element={<ObjectsPage />} />
+          <Route path="objects/:id" element={<ObjectDetailPage />} />
+          <Route path="spaces" element={<SpacesPage />} />
+          <Route path="spaces/:spaceId" element={<SpaceDetailPage />} />
+          <Route path="spaces/:spaceId/diff" element={<SpaceDiffPage />} />
+          <Route path="photos" element={<PhotosPage title="Google Photos" description="Manage connected and indexed photos." />} />
+          <Route path="settings" element={<SettingsPage title="Settings" description="Customize your account." />} />
+          
 
-        {/* Spaces */}
-        <Route path="/dashboard/spaces" element={<SpacesPage />} />
-        <Route
-          path="/dashboard/spaces/:spaceId"
-          element={<SpaceDetailPage />}
-        />
+        </Route>
 
-        {/* Space Diff */}
-        <Route
-          path="/dashboard/spaces/:spaceId/diff"
-          element={<SpaceDiffPage />}
-        />
-
-        {/* Redirect route không tồn tại */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AuthProvider>
