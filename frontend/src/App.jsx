@@ -10,6 +10,7 @@ import ObjectsPage from "@/pages/app/ObjectsPage";
 import ObjectDetailPage from "@/pages/app/ObjectDetailPage";
 import SpacesPage from "@/pages/app/SpacesPage";
 import SpaceDetailPage from "@/pages/app/SpaceDetailPage";
+import SpaceDiffPage from "@/pages/app/SpaceDiffPage";
 
 export default function App() {
   return (
@@ -46,6 +47,12 @@ export default function App() {
         <Route
           path="/dashboard/spaces/:spaceId"
           element={<SpaceDetailPage />}
+        />
+
+        {/* Space Diff */}
+        <Route
+          path="/dashboard/spaces/:spaceId/diff"
+          element={<SpaceDiffPage />}
         />
 
         {/* Redirect route không tồn tại */}
