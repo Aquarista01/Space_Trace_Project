@@ -57,9 +57,19 @@ def delete_my_data(db: Session = Depends(get_db), user=Depends(get_current_user)
 
 
 @router.post("/picker-sessions", response_model=PickerSessionOut)
-def create_session(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    access_token = google_photos.get_access_token(db, user.id)
-    data = google_photos.create_picker_session(access_token)
+def create_session(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    try:
+        access_token = google_photos.get_access_token(db, user.id)
+        data = google_photos.create_picker_session(access_token)
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Google Photos Picker failed: {str(exc)}",
+        ) from exc
 
     session = PickerSession(
         user_id=user.id,
@@ -67,9 +77,11 @@ def create_session(db: Session = Depends(get_db), user=Depends(get_current_user)
         picker_uri=data["pickerUri"],
         status="created",
     )
+
     db.add(session)
     db.commit()
     db.refresh(session)
+
     return session
 
 
