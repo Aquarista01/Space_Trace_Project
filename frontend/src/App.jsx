@@ -9,6 +9,7 @@ import PhotosPage from "@/pages/app/PhotosPage";
 import ObjectsPage from "@/pages/app/ObjectsPage";
 import ObjectDetailPage from "@/pages/app/ObjectDetailPage";
 import SpacesPage from "@/pages/app/SpacesPage";
+import SpaceDetailPage from "@/pages/app/SpaceDetailPage";
 
 export default function App() {
   return (
@@ -35,8 +36,6 @@ export default function App() {
 
         {/* Objects */}
         <Route path="/dashboard/objects" element={<ObjectsPage />} />
-
-        {/* Object Detail */}
         <Route
           path="/dashboard/objects/:id"
           element={<ObjectDetailPage />}
@@ -44,8 +43,12 @@ export default function App() {
 
         {/* Spaces */}
         <Route path="/dashboard/spaces" element={<SpacesPage />} />
+        <Route
+          path="/dashboard/spaces/:spaceId"
+          element={<SpaceDetailPage />}
+        />
 
-        {/* Redirect nếu route không tồn tại */}
+        {/* Redirect route không tồn tại */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AuthProvider>
